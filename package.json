@@ -1,0 +1,20 @@
+{
+  "name": "cqrs-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal Effect CQRS/event-sourcing sample extracted from T3 Code orchestration principles",
+  "scripts": {
+    "demo": "tsx src/main.ts",
+    "test": "tsx --test test/engine.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.102"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.3"
+  }
+}
