@@ -15,18 +15,21 @@ export interface QueryBusShape {
 
 export class QueryBus extends Context.Service<QueryBus, QueryBusShape>()(
   "cqrs-example/cqrs/QueryBus",
-) {}
+) {
+  static readonly layer = Layer.effect(
+    QueryBus,
+    Effect.gen(function* () {
+      const engine = yield* Engine
 
-export const QueryBusLive = Layer.effect(
-  QueryBus,
-  Effect.gen(function* () {
-    const engine = yield* Engine
+      const execute = Effect.fn("QueryBus.execute")(function* (query: Query) {
+        const model = yield* engine.getReadModel()
+        return handleQuery(query, model)
+      })
 
-    const execute = Effect.fn("QueryBus.execute")(function* (query: Query) {
-      const model = yield* engine.getReadModel()
-      return handleQuery(query, model)
-    })
+      return QueryBus.of({ execute })
+    }),
+  )
+}
 
-    return QueryBus.of({ execute })
-  }),
-)
+/** @deprecated Prefer `QueryBus.layer` */
+export const QueryBusLive = QueryBus.layer

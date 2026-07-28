@@ -1,5 +1,7 @@
 /**
  * Branded id schemas shared by commands, events, and read models.
+ *
+ * Construct with `ListId.make("list_1")` rather than casts.
  */
 
 import * as Schema from "effect/Schema"

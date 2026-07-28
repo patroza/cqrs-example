@@ -1,13 +1,5 @@
 /**
- * Event handlers — Nest `@EventsHandler` analogue.
- *
- * These are **side-effect** subscribers. They are NOT the projector.
- * Projector = pure fold into read model.
- * Event handler = audit log, metrics, notifications, …
- *
- * Nest note: handler errors do not surface on the command path; we record
- * them on UnhandledExceptionBus instead of failing the dispatch that
- * produced the event.
+ * Event handlers — Nest `@EventsHandler` analogue (side effects ≠ projector).
  */
 
 import * as Context from "effect/Context"
@@ -32,43 +24,47 @@ export type EventHandler = {
 export interface AuditLogShape {
   readonly entries: () => Effect.Effect<ReadonlyArray<AuditEntry>>
   readonly clear: () => Effect.Effect<void>
-  /** Built-in Nest-style event handler that only records events. */
   readonly asHandler: () => EventHandler
 }
 
 export class AuditLog extends Context.Service<AuditLog, AuditLogShape>()(
   "cqrs-example/cqrs/AuditLog",
-) {}
+) {
+  static readonly layer = Layer.effect(
+    AuditLog,
+    Effect.gen(function* () {
+      const entriesRef = yield* Ref.make<ReadonlyArray<AuditEntry>>([])
 
-export const AuditLogLive = Layer.effect(
-  AuditLog,
-  Effect.gen(function* () {
-    const entriesRef = yield* Ref.make<ReadonlyArray<AuditEntry>>([])
+      const entries = Effect.fn("AuditLog.entries")(function* () {
+        return yield* Ref.get(entriesRef)
+      })
 
-    const entries = Effect.fn("AuditLog.entries")(function* () {
-      return yield* Ref.get(entriesRef)
-    })
+      const clear = Effect.fn("AuditLog.clear")(function* () {
+        yield* Ref.set(entriesRef, [])
+      })
 
-    const clear = Effect.fn("AuditLog.clear")(function* () {
-      yield* Ref.set(entriesRef, [])
-    })
+      const asHandler = (): EventHandler => ({
+        name: "AuditLogHandler",
+        handle: Effect.fn("AuditLogHandler.handle")(function* (event: DomainEvent) {
+          yield* Ref.update(entriesRef, (xs) => [
+            ...xs,
+            {
+              sequence: event.sequence,
+              eventType: event.type,
+              aggregateId: event.aggregateId,
+              recordedAt: event.occurredAt,
+            },
+          ])
+        }),
+      })
 
-    const asHandler = (): EventHandler => ({
-      name: "AuditLogHandler",
-      handle: Effect.fn("AuditLogHandler.handle")(function* (event: DomainEvent) {
-        const entry: AuditEntry = {
-          sequence: event.sequence,
-          eventType: event.type,
-          aggregateId: event.aggregateId,
-          recordedAt: event.occurredAt,
-        }
-        yield* Ref.update(entriesRef, (xs) => [...xs, entry])
-      }),
-    })
+      return AuditLog.of({ entries, clear, asHandler })
+    }),
+  )
+}
 
-    return AuditLog.of({ entries, clear, asHandler })
-  }),
-)
+/** @deprecated Prefer `AuditLog.layer` */
+export const AuditLogLive = AuditLog.layer
 
 export type UnhandledExceptionInfo = {
   readonly handlerName: string
@@ -82,37 +78,33 @@ export interface UnhandledExceptionBusShape {
   readonly drain: () => Effect.Effect<ReadonlyArray<UnhandledExceptionInfo>>
 }
 
-/**
- * Nest `UnhandledExceptionBus` analogue for async event-handler failures.
- */
 export class UnhandledExceptionBus extends Context.Service<
   UnhandledExceptionBus,
   UnhandledExceptionBusShape
->()("cqrs-example/cqrs/UnhandledExceptionBus") {}
+>()("cqrs-example/cqrs/UnhandledExceptionBus") {
+  static readonly layer = Layer.effect(
+    UnhandledExceptionBus,
+    Effect.gen(function* () {
+      const ref = yield* Ref.make<ReadonlyArray<UnhandledExceptionInfo>>([])
 
-export const UnhandledExceptionBusLive = Layer.effect(
-  UnhandledExceptionBus,
-  Effect.gen(function* () {
-    const ref = yield* Ref.make<ReadonlyArray<UnhandledExceptionInfo>>([])
+      const publish = Effect.fn("UnhandledExceptionBus.publish")(function* (
+        info: UnhandledExceptionInfo,
+      ) {
+        yield* Ref.update(ref, (xs) => [...xs, info])
+      })
 
-    const publish = Effect.fn("UnhandledExceptionBus.publish")(function* (
-      info: UnhandledExceptionInfo,
-    ) {
-      yield* Ref.update(ref, (xs) => [...xs, info])
-    })
+      const drain = Effect.fn("UnhandledExceptionBus.drain")(function* () {
+        return yield* Ref.getAndSet(ref, [])
+      })
 
-    const drain = Effect.fn("UnhandledExceptionBus.drain")(function* () {
-      return yield* Ref.getAndSet(ref, [])
-    })
+      return UnhandledExceptionBus.of({ publish, drain })
+    }),
+  )
+}
 
-    return UnhandledExceptionBus.of({ publish, drain })
-  }),
-)
+/** @deprecated Prefer `UnhandledExceptionBus.layer` */
+export const UnhandledExceptionBusLive = UnhandledExceptionBus.layer
 
-/**
- * Run all event handlers for one committed event.
- * Failures are swallowed into UnhandledExceptionBus (Nest behaviour).
- */
 export const runEventHandlers = Effect.fn("runEventHandlers")(function* (args: {
   readonly event: DomainEvent
   readonly handlers: ReadonlyArray<EventHandler>
