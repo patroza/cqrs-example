@@ -12,7 +12,6 @@ import * as Effect from "effect/Effect"
 import { CommandInvariantError } from "./errors.ts"
 import type {
   Command,
-  CommandId,
   EventId,
   ListId,
   ReadModel,
@@ -53,7 +52,7 @@ export const decide = Effect.fn("decider.decide")(function* (input: DecideInput)
   const { command, readModel } = input
   const eventId = yield* newEventId()
   const occurredAt = yield* nowIso
-  const commandId = command.commandId as CommandId
+  const commandId = command.commandId
 
   switch (command.type) {
     case "list.create": {

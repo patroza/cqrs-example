@@ -2,85 +2,16 @@
  * Domain contracts for a tiny todo CQRS/ES sample.
  *
  * Mirrors T3 orchestration ideas:
- * - Commands = intent
+ * - Commands = intent (Schema classes — see commands.ts)
  * - Events = durable facts (source of truth)
  * - Read model = projection of events
  * - sequence = global monotonic cursor for catch-up / replay
  */
 
-import * as Schema from "effect/Schema"
+import type { CommandId, EventId, ListId, TodoId } from "./ids.ts"
 
-// ---------------------------------------------------------------------------
-// IDs
-// ---------------------------------------------------------------------------
-
-export const ListId = Schema.String.pipe(Schema.brand("ListId"))
-export type ListId = typeof ListId.Type
-
-export const TodoId = Schema.String.pipe(Schema.brand("TodoId"))
-export type TodoId = typeof TodoId.Type
-
-export const CommandId = Schema.String.pipe(Schema.brand("CommandId"))
-export type CommandId = typeof CommandId.Type
-
-export const EventId = Schema.String.pipe(Schema.brand("EventId"))
-export type EventId = typeof EventId.Type
-
-// ---------------------------------------------------------------------------
-// Commands (intent)
-// ---------------------------------------------------------------------------
-
-export type CreateListCommand = {
-  readonly type: "list.create"
-  readonly commandId: CommandId
-  readonly listId: ListId
-  readonly title: string
-}
-
-export type AddTodoCommand = {
-  readonly type: "todo.add"
-  readonly commandId: CommandId
-  readonly listId: ListId
-  readonly todoId: TodoId
-  readonly text: string
-}
-
-export type CompleteTodoCommand = {
-  readonly type: "todo.complete"
-  readonly commandId: CommandId
-  readonly listId: ListId
-  readonly todoId: TodoId
-}
-
-export type RenameTodoCommand = {
-  readonly type: "todo.rename"
-  readonly commandId: CommandId
-  readonly listId: ListId
-  readonly todoId: TodoId
-  readonly text: string
-}
-
-export type RemoveTodoCommand = {
-  readonly type: "todo.remove"
-  readonly commandId: CommandId
-  readonly listId: ListId
-  readonly todoId: TodoId
-}
-
-/** Nest-style process-manager outcome: archive a list once work is done. */
-export type ArchiveListCommand = {
-  readonly type: "list.archive"
-  readonly commandId: CommandId
-  readonly listId: ListId
-}
-
-export type Command =
-  | CreateListCommand
-  | AddTodoCommand
-  | CompleteTodoCommand
-  | RenameTodoCommand
-  | RemoveTodoCommand
-  | ArchiveListCommand
+export * from "./ids.ts"
+export * from "./commands.ts"
 
 // ---------------------------------------------------------------------------
 // Domain events (facts) — source of truth once persisted with a sequence

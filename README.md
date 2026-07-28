@@ -89,12 +89,42 @@ When every todo on a list is completed, `ArchiveWhenAllCompleteSaga` enqueues:
 That command is processed asynchronously on the same command queue (no
 self-deadlock). See `src/cqrs/sagas.ts`.
 
+## Commands as Schema classes
+
+Commands are Effect `Schema.Class` values. Prefer **`.make`** so `type` and
+`commandId` fill in automatically:
+
+```ts
+import { CreateListCommand, AddTodoCommand, CompleteTodoCommand } from "./src/domain/commands.ts"
+
+// auto type + commandId
+const create = CreateListCommand.make({ listId: "list_1", title: "Groceries" })
+
+// override commandId when you need idempotency or saga correlation
+const again = CreateListCommand.make({
+  listId: "list_1",
+  title: "Groceries",
+  commandId: create.commandId,
+})
+
+await engine.dispatch(AddTodoCommand.make({
+  listId: "list_1",
+  todoId: "todo_1",
+  text: "Milk",
+}))
+```
+
+See `src/domain/commands.ts`. `Command` is the TypeScript union of command
+instances; `CommandSchema` is the Effect `Schema.Union` for decoding.
+
 ## Layout
 
 ```text
 src/
   domain/
-    types.ts         # Command, DomainEvent, ReadModel, Snapshot
+    ids.ts           # branded ListId, TodoId, CommandId, EventId
+    commands.ts      # Schema.Class commands + Command.make
+    types.ts         # DomainEvent, ReadModel, Snapshot (re-exports commands)
     errors.ts
     decider.ts       # pure command + state → events
     projector.ts     # pure event → read model
