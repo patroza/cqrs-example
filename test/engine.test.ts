@@ -11,16 +11,19 @@ import { AppLayer } from "../src/appLayer.ts"
 import { subscribeWithCatchUp } from "../src/client/catchUp.ts"
 import { AuditLog } from "../src/cqrs/eventHandlers.ts"
 import { QueryBus } from "../src/cqrs/QueryBus.ts"
+import {
+  AddTodoCommand,
+  CompleteTodoCommand,
+  CreateListCommand,
+} from "../src/domain/commands.ts"
+import type { ListId, TodoId } from "../src/domain/ids.ts"
 import { rebuildFromEvents } from "../src/domain/projector.ts"
-import type { Command, CommandId, ListId, TodoId } from "../src/domain/types.ts"
 import { Engine } from "../src/engine/Engine.ts"
 
 const run = <A, E>(
   effect: Effect.Effect<A, E, Engine | QueryBus | AuditLog | Scope.Scope>,
 ) => Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(AppLayer)))
 
-let n = 0
-const commandId = (): CommandId => `cmd_${++n}` as CommandId
 const listId = "list_1" as ListId
 const todoId = "todo_1" as TodoId
 
@@ -36,24 +39,33 @@ const waitUntil = <R>(
   })
 
 describe("CQRS/ES engine", () => {
+  it("Schema command .make auto-fills type and commandId", () => {
+    const a = CreateListCommand.make({ listId, title: "Work" })
+    const b = CreateListCommand.make({ listId, title: "Work" })
+
+    assert.equal(a.type, "list.create")
+    assert.equal(a.title, "Work")
+    assert.ok(a.commandId.startsWith("cmd_"))
+    assert.notEqual(a.commandId, b.commandId)
+    assert.ok(a instanceof CreateListCommand)
+
+    const fixed = CreateListCommand.make({
+      listId,
+      title: "Fixed",
+      commandId: "cmd_explicit" as CreateListCommand["commandId"],
+    })
+    assert.equal(fixed.commandId, "cmd_explicit")
+  })
+
   it("decides, appends, projects, and exposes a snapshot", async () => {
     await run(
       Effect.gen(function* () {
         const engine = yield* Engine
 
-        yield* engine.dispatch({
-          type: "list.create",
-          commandId: commandId(),
-          listId,
-          title: "Work",
-        })
-        yield* engine.dispatch({
-          type: "todo.add",
-          commandId: commandId(),
-          listId,
-          todoId,
-          text: "Ship sample",
-        })
+        yield* engine.dispatch(CreateListCommand.make({ listId, title: "Work" }))
+        yield* engine.dispatch(
+          AddTodoCommand.make({ listId, todoId, text: "Ship sample" }),
+        )
 
         const snapshot = yield* engine.getSnapshot()
         assert.equal(snapshot.snapshotSequence, 2)
@@ -70,32 +82,20 @@ describe("CQRS/ES engine", () => {
     await run(
       Effect.gen(function* () {
         const engine = yield* Engine
-        const id = commandId()
+        const orphan = AddTodoCommand.make({
+          listId,
+          todoId,
+          text: "orphan",
+        })
 
-        const result = yield* Effect.result(
-          engine.dispatch({
-            type: "todo.add",
-            commandId: id,
-            listId,
-            todoId,
-            text: "orphan",
-          }),
-        )
+        const result = yield* Effect.result(engine.dispatch(orphan))
 
         assert.equal(Result.isFailure(result), true)
         if (Result.isFailure(result)) {
           assert.equal(result.failure._tag, "CommandInvariantError")
         }
 
-        const again = yield* Effect.result(
-          engine.dispatch({
-            type: "todo.add",
-            commandId: id,
-            listId,
-            todoId,
-            text: "orphan",
-          }),
-        )
+        const again = yield* Effect.result(engine.dispatch(orphan))
 
         assert.equal(Result.isFailure(again), true)
         if (Result.isFailure(again)) {
@@ -109,12 +109,10 @@ describe("CQRS/ES engine", () => {
     await run(
       Effect.gen(function* () {
         const engine = yield* Engine
-        const create: Command = {
-          type: "list.create",
-          commandId: commandId(),
+        const create = CreateListCommand.make({
           listId: "list_idem" as ListId,
           title: "Once",
-        }
+        })
 
         const first = yield* engine.dispatch(create)
         const second = yield* engine.dispatch(create)
@@ -133,25 +131,9 @@ describe("CQRS/ES engine", () => {
         const lid = "list_rebuild" as ListId
         const tid = "todo_rebuild" as TodoId
 
-        yield* engine.dispatch({
-          type: "list.create",
-          commandId: commandId(),
-          listId: lid,
-          title: "Rebuild",
-        })
-        yield* engine.dispatch({
-          type: "todo.add",
-          commandId: commandId(),
-          listId: lid,
-          todoId: tid,
-          text: "A",
-        })
-        yield* engine.dispatch({
-          type: "todo.complete",
-          commandId: commandId(),
-          listId: lid,
-          todoId: tid,
-        })
+        yield* engine.dispatch(CreateListCommand.make({ listId: lid, title: "Rebuild" }))
+        yield* engine.dispatch(AddTodoCommand.make({ listId: lid, todoId: tid, text: "A" }))
+        yield* engine.dispatch(CompleteTodoCommand.make({ listId: lid, todoId: tid }))
 
         // Saga may archive after complete — wait so rebuild includes archive event.
         yield* waitUntil(
@@ -180,19 +162,8 @@ describe("CQRS/ES engine", () => {
         const t1 = "t1" as TodoId
         const t2 = "t2" as TodoId
 
-        yield* engine.dispatch({
-          type: "list.create",
-          commandId: commandId(),
-          listId: lid,
-          title: "Catchup",
-        })
-        yield* engine.dispatch({
-          type: "todo.add",
-          commandId: commandId(),
-          listId: lid,
-          todoId: t1,
-          text: "one",
-        })
+        yield* engine.dispatch(CreateListCommand.make({ listId: lid, title: "Catchup" }))
+        yield* engine.dispatch(AddTodoCommand.make({ listId: lid, todoId: t1, text: "one" }))
         // sequence should be 2 here
 
         const client = yield* subscribeWithCatchUp({ engine, afterSequence: 1 })
@@ -200,13 +171,7 @@ describe("CQRS/ES engine", () => {
         assert.equal(hydrated.lastMode.kind, "replay")
         assert.equal(hydrated.model.snapshotSequence, 2)
 
-        yield* engine.dispatch({
-          type: "todo.add",
-          commandId: commandId(),
-          listId: lid,
-          todoId: t2,
-          text: "two",
-        })
+        yield* engine.dispatch(AddTodoCommand.make({ listId: lid, todoId: t2, text: "two" }))
 
         const live = yield* Queue.take(client.updates)
         assert.equal(live.lastMode.kind, "live")
@@ -222,12 +187,7 @@ describe("CQRS/ES engine", () => {
         const queryBus = yield* QueryBus
         const lid = "list_query" as ListId
 
-        yield* engine.dispatch({
-          type: "list.create",
-          commandId: commandId(),
-          listId: lid,
-          title: "Queryable",
-        })
+        yield* engine.dispatch(CreateListCommand.make({ listId: lid, title: "Queryable" }))
 
         const result = yield* queryBus.execute({ type: "list.get", listId: lid })
         assert.equal(result.type, "list.get")
@@ -255,12 +215,7 @@ describe("CQRS/ES engine", () => {
         const lid = "list_audit" as ListId
 
         yield* audit.clear()
-        yield* engine.dispatch({
-          type: "list.create",
-          commandId: commandId(),
-          listId: lid,
-          title: "Audited",
-        })
+        yield* engine.dispatch(CreateListCommand.make({ listId: lid, title: "Audited" }))
 
         const entries = yield* audit.entries()
         assert.ok(entries.some((e) => e.eventType === "list.created" && e.aggregateId === lid))
@@ -281,42 +236,15 @@ describe("CQRS/ES engine", () => {
         const t1 = "s1" as TodoId
         const t2 = "s2" as TodoId
 
-        yield* engine.dispatch({
-          type: "list.create",
-          commandId: commandId(),
-          listId: lid,
-          title: "Saga list",
-        })
-        yield* engine.dispatch({
-          type: "todo.add",
-          commandId: commandId(),
-          listId: lid,
-          todoId: t1,
-          text: "one",
-        })
-        yield* engine.dispatch({
-          type: "todo.add",
-          commandId: commandId(),
-          listId: lid,
-          todoId: t2,
-          text: "two",
-        })
-        yield* engine.dispatch({
-          type: "todo.complete",
-          commandId: commandId(),
-          listId: lid,
-          todoId: t1,
-        })
+        yield* engine.dispatch(CreateListCommand.make({ listId: lid, title: "Saga list" }))
+        yield* engine.dispatch(AddTodoCommand.make({ listId: lid, todoId: t1, text: "one" }))
+        yield* engine.dispatch(AddTodoCommand.make({ listId: lid, todoId: t2, text: "two" }))
+        yield* engine.dispatch(CompleteTodoCommand.make({ listId: lid, todoId: t1 }))
 
         // Not archived yet — one open todo remains.
         assert.equal((yield* engine.getReadModel()).lists.get(lid)?.archived, false)
 
-        yield* engine.dispatch({
-          type: "todo.complete",
-          commandId: commandId(),
-          listId: lid,
-          todoId: t2,
-        })
+        yield* engine.dispatch(CompleteTodoCommand.make({ listId: lid, todoId: t2 }))
 
         yield* waitUntil(
           Effect.gen(function* () {

@@ -14,11 +14,13 @@ import { AppLayer } from "./appLayer.ts"
 import { subscribeWithCatchUp } from "./client/catchUp.ts"
 import { AuditLog } from "./cqrs/eventHandlers.ts"
 import { QueryBus } from "./cqrs/QueryBus.ts"
-import type { Command, CommandId, ListId, TodoId } from "./domain/types.ts"
+import {
+  CompleteTodoCommand,
+  CreateListCommand,
+  AddTodoCommand,
+} from "./domain/commands.ts"
+import type { ListId, TodoId } from "./domain/ids.ts"
 import { Engine } from "./engine/Engine.ts"
-
-let commandCounter = 0
-const cmdId = (): CommandId => `cmd_${++commandCounter}` as CommandId
 
 /** Wait until the projected list is archived (saga follow-up). */
 const waitUntilArchived = (engine: typeof Engine.Service, listId: ListId) =>
@@ -40,53 +42,29 @@ const program = Effect.gen(function* () {
   const milk = "todo_milk" as TodoId
   const eggs = "todo_eggs" as TodoId
 
-  const commands: Command[] = [
-    {
-      type: "list.create",
-      commandId: cmdId(),
-      listId,
-      title: "Groceries",
-    },
-    {
-      type: "todo.add",
-      commandId: cmdId(),
-      listId,
-      todoId: milk,
-      text: "Milk",
-    },
-    {
-      type: "todo.add",
-      commandId: cmdId(),
-      listId,
-      todoId: eggs,
-      text: "Eggs",
-    },
-    {
-      type: "todo.complete",
-      commandId: cmdId(),
-      listId,
-      todoId: milk,
-    },
+  const createList = CreateListCommand.make({ listId, title: "Groceries" })
+  const commands = [
+    createList,
+    AddTodoCommand.make({ listId, todoId: milk, text: "Milk" }),
+    AddTodoCommand.make({ listId, todoId: eggs, text: "Eggs" }),
+    CompleteTodoCommand.make({ listId, todoId: milk }),
   ]
 
-  yield* Console.log("=== CommandBus.dispatch ===")
+  yield* Console.log("=== CommandBus.dispatch (Schema .make) ===")
   for (const command of commands) {
     const result = yield* engine.dispatch(command)
-    yield* Console.log(`  ${command.type} → sequence ${result.sequence}`)
+    yield* Console.log(
+      `  ${command.type} id=${command.commandId.slice(0, 12)}… → sequence ${result.sequence}`,
+    )
   }
 
-  // Idempotency: same commandId is a no-op accept.
-  const again = yield* engine.dispatch(commands[0]!)
+  // Idempotency: same command instance (same commandId) is a no-op accept.
+  const again = yield* engine.dispatch(createList)
   yield* Console.log(`  re-dispatch list.create → sequence ${again.sequence} (idempotent)`)
 
   // Invariant failure.
   const rejected = yield* Effect.result(
-    engine.dispatch({
-      type: "todo.complete",
-      commandId: cmdId(),
-      listId,
-      todoId: milk,
-    }),
+    engine.dispatch(CompleteTodoCommand.make({ listId, todoId: milk })),
   )
   yield* Console.log(
     `  complete already-done milk → ${
@@ -102,12 +80,7 @@ const program = Effect.gen(function* () {
 
   // Complete last todo → saga archives the list.
   yield* Console.log("\n=== Saga (todo.completed → list.archive) ===")
-  yield* engine.dispatch({
-    type: "todo.complete",
-    commandId: cmdId(),
-    listId,
-    todoId: eggs,
-  })
+  yield* engine.dispatch(CompleteTodoCommand.make({ listId, todoId: eggs }))
   yield* waitUntilArchived(engine, listId)
   const afterSaga = yield* queryBus.execute({ type: "list.get", listId })
   yield* Console.log(`  after saga → ${JSON.stringify(afterSaga.value)}`)

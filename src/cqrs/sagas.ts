@@ -9,6 +9,7 @@
  * single command worker never deadlocks awaiting itself.
  */
 
+import { ArchiveListCommand } from "../domain/commands.ts"
 import type { Command, CommandId, DomainEvent, ReadModel } from "../domain/types.ts"
 
 export type Saga = {
@@ -41,13 +42,11 @@ export const archiveWhenAllCompleteSaga: Saga = {
     if (!list.todos.every((todo) => todo.completed)) return []
 
     // Deterministic commandId → idempotent if the saga re-fires.
-    const commandId = `saga:archive:${listId}:@${event.sequence}` as CommandId
     return [
-      {
-        type: "list.archive",
-        commandId,
+      ArchiveListCommand.make({
         listId,
-      },
+        commandId: `saga:archive:${listId}:@${event.sequence}` as CommandId,
+      }),
     ]
   },
 }
