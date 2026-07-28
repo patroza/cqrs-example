@@ -1,26 +1,28 @@
 /**
- * Composed application layer — engine + Nest-like CQRS surfaces.
- *
- * `provideMerge` keeps shared infra (AuditLog, EventStore, …) as the same
- * instances Engine uses and tests can inject.
+ * Composed application layer — Effect idiomatic service.layer composition.
  */
 
+import { NodeCrypto } from "@effect/platform-node"
 import * as Layer from "effect/Layer"
 
-import { AuditLogLive, UnhandledExceptionBusLive } from "./cqrs/eventHandlers.ts"
-import { QueryBusLive } from "./cqrs/QueryBus.ts"
-import { EngineLive } from "./engine/Engine.ts"
-import { CommandReceiptsLive } from "./persistence/CommandReceipts.ts"
-import { EventStoreLive } from "./persistence/EventStore.ts"
-import { CryptoLive } from "./runtime/CryptoLive.ts"
+import { DomainEvents } from "./cqrs/DomainEvents.ts"
+import { AuditLog, UnhandledExceptionBus } from "./cqrs/eventHandlers.ts"
+import { QueryBus } from "./cqrs/QueryBus.ts"
+import { Engine } from "./engine/Engine.ts"
+import { CommandReceipts } from "./persistence/CommandReceipts.ts"
+import { EventStore } from "./persistence/EventStore.ts"
 
-const EngineStack = EngineLive.pipe(
-  Layer.provideMerge(EventStoreLive),
-  Layer.provideMerge(CommandReceiptsLive),
-  Layer.provideMerge(AuditLogLive),
-  Layer.provideMerge(UnhandledExceptionBusLive),
-  Layer.provideMerge(CryptoLive),
+const Shared = Layer.mergeAll(
+  EventStore.layer,
+  CommandReceipts.layer,
+  DomainEvents.layer,
+  AuditLog.layer,
+  UnhandledExceptionBus.layer,
+  NodeCrypto.layer,
 )
 
-/** Full app: QueryBus + Engine + shared infra. */
-export const AppLayer = QueryBusLive.pipe(Layer.provideMerge(EngineStack))
+const EngineLayer = Engine.layer.pipe(Layer.provide(Shared))
+const QueryLayer = QueryBus.layer.pipe(Layer.provide(EngineLayer))
+
+/** Full app: QueryBus + Engine + shared infra (same instances). */
+export const AppLayer = Layer.mergeAll(Shared, EngineLayer, QueryLayer)

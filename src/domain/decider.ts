@@ -8,11 +8,13 @@
 import * as Crypto from "effect/Crypto"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
+import * as Option from "effect/Option"
 
 import { CommandInvariantError } from "./errors.ts"
+import { findList } from "./readModel.ts"
+import { EventId } from "./ids.ts"
 import type {
   Command,
-  EventId,
   ListId,
   ReadModel,
   UnsequencedEvent,
@@ -27,23 +29,25 @@ const newEventId = Effect.fn("decider.newEventId")(function* () {
   const crypto = yield* Crypto.Crypto
   // Platform crypto failures are defects for this sample.
   const id = yield* crypto.randomUUIDv4.pipe(Effect.orDie)
-  return `evt_${id}` as EventId
+  return EventId.make(`evt_${id}`)
 })
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso)
 
-const requireList = (readModel: ReadModel, listId: ListId, commandType: string) => {
-  const list = readModel.lists.get(listId)
-  if (!list) {
-    return Effect.fail(
-      new CommandInvariantError({
-        commandType,
-        detail: `List ${listId} does not exist.`,
-      }),
-    )
+const requireList = Effect.fn("decider.requireList")(function* (
+  readModel: ReadModel,
+  listId: ListId,
+  commandType: string,
+) {
+  const list = findList(readModel, listId)
+  if (Option.isNone(list)) {
+    return yield* new CommandInvariantError({
+      commandType,
+      detail: `List ${listId} does not exist.`,
+    })
   }
-  return Effect.succeed(list)
-}
+  return list.value
+})
 
 /**
  * Turn a command + current state into one or more unsequenced domain events.
@@ -56,7 +60,7 @@ export const decide = Effect.fn("decider.decide")(function* (input: DecideInput)
 
   switch (command.type) {
     case "list.create": {
-      if (readModel.lists.has(command.listId)) {
+      if (Option.isSome(findList(readModel, command.listId))) {
         return yield* new CommandInvariantError({
           commandType: command.type,
           detail: `List ${command.listId} already exists.`,

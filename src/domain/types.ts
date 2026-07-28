@@ -8,6 +8,8 @@
  * - sequence = global monotonic cursor for catch-up / replay
  */
 
+import * as HashMap from "effect/HashMap"
+
 import type { CommandId, EventId, ListId, TodoId } from "./ids.ts"
 
 export * from "./ids.ts"
@@ -131,19 +133,13 @@ export type TodoList = {
 
 /**
  * Command-side + query-side read model for this sample.
- * In T3 these are split (in-memory CommandReadModel + SQL projections),
- * but the fold is the same idea: pure event → state.
+ * Lists live in an Effect `HashMap` (immutable, structural equality).
  */
 export type ReadModel = {
   /** Last applied global event sequence (0 = empty). */
   readonly snapshotSequence: number
-  readonly lists: ReadonlyMap<ListId, TodoList>
+  readonly lists: HashMap.HashMap<ListId, TodoList>
 }
-
-export const emptyReadModel = (): ReadModel => ({
-  snapshotSequence: 0,
-  lists: new Map(),
-})
 
 /** Point-in-time view a client would hydrate from (like T3 shell/thread snapshots). */
 export type Snapshot = {
@@ -151,7 +147,12 @@ export type Snapshot = {
   readonly lists: ReadonlyArray<TodoList>
 }
 
+export const emptyReadModel = (): ReadModel => ({
+  snapshotSequence: 0,
+  lists: HashMap.empty(),
+})
+
 export const toSnapshot = (model: ReadModel): Snapshot => ({
   snapshotSequence: model.snapshotSequence,
-  lists: Array.from(model.lists.values()),
+  lists: Array.from(HashMap.values(model.lists)),
 })

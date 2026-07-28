@@ -45,6 +45,23 @@ Read model ───────────────────────
   snapshot @ N → replay (N+1…M) → live
 ```
 
+## Effect idioms (v4)
+
+This sample follows guidance from Effect’s `LLMS.md` and common app patterns
+(e.g. macs scanner):
+
+| Idiom | Where |
+|---|---|
+| `Context.Service` + **`static layer`** | `EventStore`, `Engine`, `QueryBus`, `DomainEvents`, … |
+| `Effect.fn("Name.method")` | Service methods and helpers |
+| `Schema.Class` / `Schema.tag` / `.make` | Commands |
+| Branded ids via `ListId.make(...)` | `src/domain/ids.ts` |
+| `HashMap` for read-model collections | `ReadModel.lists` |
+| PubSub as a service (`DomainEvents`) | Like Effect’s PubSub cookbook |
+| `NodeCrypto.layer` | `@effect/platform-node` (not hand-rolled) |
+| `NodeRuntime.runMain` | `src/main.ts` entrypoint |
+| `Schedule` polling | `waitUntil` for saga tests/demo |
+
 ## Quick start
 
 ```bash
@@ -122,25 +139,29 @@ instances; `CommandSchema` is the Effect `Schema.Union` for decoding.
 ```text
 src/
   domain/
-    ids.ts           # branded ListId, TodoId, CommandId, EventId
-    commands.ts      # Schema.Class commands + Command.make
-    types.ts         # DomainEvent, ReadModel, Snapshot (re-exports commands)
+    ids.ts           # branded ids (ListId.make / TodoId.make)
+    commands.ts      # Schema.Class + Schema.tag + auto commandId
+    types.ts         # DomainEvent, ReadModel (HashMap), Snapshot
+    readModel.ts     # HashMap helpers (findList / updateList)
     errors.ts
     decider.ts       # pure command + state → events
     projector.ts     # pure event → read model
   cqrs/
-    queries.ts       # Query types + pure handlers
-    QueryBus.ts      # Nest QueryBus analogue
+    DomainEvents.ts  # PubSub service (EventBus)
+    queries.ts
+    QueryBus.ts      # static layer
     eventHandlers.ts # AuditLog + UnhandledExceptionBus
-    sagas.ts         # event → follow-up commands
+    sagas.ts
   persistence/
-    EventStore.ts
+    EventStore.ts    # static layer
     CommandReceipts.ts
   engine/
-    Engine.ts        # CommandBus + EventBus core
+    Engine.ts        # static layer; uses DomainEvents
   client/
-    catchUp.ts       # snapshot / replay / live
-  main.ts
+    catchUp.ts
+  effect/
+    waitUntil.ts     # Schedule-based poll
+  main.ts            # NodeRuntime.runMain
   appLayer.ts
 test/
   engine.test.ts

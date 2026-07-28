@@ -1,8 +1,5 @@
 /**
  * Command receipt store — idempotent dispatch by commandId.
- *
- * Mirrors T3's OrchestrationCommandReceiptRepository idea:
- * replaying the same commandId returns the prior accept/reject outcome.
  */
 
 import * as Context from "effect/Context"
@@ -32,26 +29,29 @@ export interface CommandReceiptsShape {
 
 export class CommandReceipts extends Context.Service<CommandReceipts, CommandReceiptsShape>()(
   "cqrs-example/persistence/CommandReceipts",
-) {}
+) {
+  static readonly layer = Layer.effect(
+    CommandReceipts,
+    Effect.gen(function* () {
+      const mapRef = yield* Ref.make(new Map<CommandId, CommandReceipt>())
 
-export const CommandReceiptsLive = Layer.effect(
-  CommandReceipts,
-  Effect.gen(function* () {
-    const mapRef = yield* Ref.make(new Map<CommandId, CommandReceipt>())
-
-    const get = Effect.fn("CommandReceipts.get")(function* (commandId: CommandId) {
-      const map = yield* Ref.get(mapRef)
-      return Option.fromNullishOr(map.get(commandId))
-    })
-
-    const put = Effect.fn("CommandReceipts.put")(function* (receipt: CommandReceipt) {
-      yield* Ref.update(mapRef, (map) => {
-        const next = new Map(map)
-        next.set(receipt.commandId, receipt)
-        return next
+      const get = Effect.fn("CommandReceipts.get")(function* (commandId: CommandId) {
+        const map = yield* Ref.get(mapRef)
+        return Option.fromNullishOr(map.get(commandId))
       })
-    })
 
-    return CommandReceipts.of({ get, put })
-  }),
-)
+      const put = Effect.fn("CommandReceipts.put")(function* (receipt: CommandReceipt) {
+        yield* Ref.update(mapRef, (map) => {
+          const next = new Map(map)
+          next.set(receipt.commandId, receipt)
+          return next
+        })
+      })
+
+      return CommandReceipts.of({ get, put })
+    }),
+  )
+}
+
+/** @deprecated Prefer `CommandReceipts.layer` */
+export const CommandReceiptsLive = CommandReceipts.layer

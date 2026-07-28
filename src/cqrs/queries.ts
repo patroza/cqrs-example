@@ -1,12 +1,12 @@
 /**
  * Query side — Nest `Query` / `QueryHandler` analogue.
- *
- * Reads never go through the command worker. They only look at the
- * projected read model (same idea as Nest QueryBus → QueryHandler → repo).
  */
 
+import * as HashMap from "effect/HashMap"
+import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 
+import { findList } from "../domain/readModel.ts"
 import type { ListId, ReadModel, Snapshot, TodoList } from "../domain/types.ts"
 import { toSnapshot } from "../domain/types.ts"
 
@@ -21,18 +21,19 @@ export type GetListQuery = {
 
 export type ListListsQuery = {
   readonly type: "list.list"
-  /** When true, omit archived lists. */
   readonly activeOnly?: boolean
 }
 
 export type Query = GetSnapshotQuery | GetListQuery | ListListsQuery
 
-export type GetListResult = {
-  readonly found: true
-  readonly list: TodoList
-} | {
-  readonly found: false
-}
+export type GetListResult =
+  | {
+      readonly found: true
+      readonly list: TodoList
+    }
+  | {
+      readonly found: false
+    }
 
 export type QueryResult =
   | { readonly type: "snapshot.get"; readonly value: Snapshot }
@@ -46,23 +47,22 @@ export class QueryNotFoundError extends Schema.TaggedErrorClass<QueryNotFoundErr
   },
 ) {}
 
-/**
- * Pure query handler (Nest `IQueryHandler.execute`).
- * Kept pure so tests can run without the engine.
- */
+/** Pure query handler (Nest `IQueryHandler.execute`). */
 export const handleQuery = (query: Query, model: ReadModel): QueryResult => {
   switch (query.type) {
     case "snapshot.get":
       return { type: "snapshot.get", value: toSnapshot(model) }
     case "list.get": {
-      const list = model.lists.get(query.listId)
+      const list = findList(model, query.listId)
       return {
         type: "list.get",
-        value: list ? { found: true, list } : { found: false },
+        value: Option.isSome(list)
+          ? { found: true, list: list.value }
+          : { found: false },
       }
     }
     case "list.list": {
-      let lists = Array.from(model.lists.values())
+      let lists = Array.from(HashMap.values(model.lists))
       if (query.activeOnly) {
         lists = lists.filter((list) => !list.archived)
       }

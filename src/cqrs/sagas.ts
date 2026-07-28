@@ -1,23 +1,16 @@
 /**
- * Sagas — Nest `@Saga()` analogue: event stream → new commands.
- *
- * Unlike the projector (pure state fold) and event handlers (side effects),
- * a saga **reacts** by dispatching follow-up commands onto the CommandBus.
- *
- * Nest runs this asynchronously via RxJS Observables. We return commands
- * after each committed event and enqueue them (fire-and-forget) so the
- * single command worker never deadlocks awaiting itself.
+ * Sagas — Nest `@Saga()` analogue: event → follow-up commands.
  */
 
+import * as Option from "effect/Option"
+
 import { ArchiveListCommand } from "../domain/commands.ts"
-import type { Command, CommandId, DomainEvent, ReadModel } from "../domain/types.ts"
+import { CommandId } from "../domain/ids.ts"
+import { findList } from "../domain/readModel.ts"
+import type { Command, DomainEvent, ReadModel } from "../domain/types.ts"
 
 export type Saga = {
   readonly name: string
-  /**
-   * Inspect a committed event + post-projection read model.
-   * Return zero or more commands to enqueue.
-   */
   readonly react: (
     event: DomainEvent,
     readModel: ReadModel,
@@ -26,7 +19,6 @@ export type Saga = {
 
 /**
  * When every todo on a list is completed, archive the list.
- * Mirrors Nest's "HeroKilledDragon → DropAncientItem" process manager.
  */
 export const archiveWhenAllCompleteSaga: Saga = {
   name: "ArchiveWhenAllCompleteSaga",
@@ -36,16 +28,15 @@ export const archiveWhenAllCompleteSaga: Saga = {
     }
 
     const listId = event.payload.listId
-    const list = readModel.lists.get(listId)
-    if (!list || list.archived) return []
-    if (list.todos.length === 0) return []
-    if (!list.todos.every((todo) => todo.completed)) return []
+    const list = findList(readModel, listId)
+    if (Option.isNone(list) || list.value.archived) return []
+    if (list.value.todos.length === 0) return []
+    if (!list.value.todos.every((todo) => todo.completed)) return []
 
-    // Deterministic commandId → idempotent if the saga re-fires.
     return [
       ArchiveListCommand.make({
         listId,
-        commandId: `saga:archive:${listId}:@${event.sequence}` as CommandId,
+        commandId: CommandId.make(`saga:archive:${listId}:@${event.sequence}`),
       }),
     ]
   },
