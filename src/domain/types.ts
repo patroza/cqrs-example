@@ -2,77 +2,18 @@
  * Domain contracts for a tiny todo CQRS/ES sample.
  *
  * Mirrors T3 orchestration ideas:
- * - Commands = intent
+ * - Commands = intent (Schema classes — see commands.ts)
  * - Events = durable facts (source of truth)
  * - Read model = projection of events
  * - sequence = global monotonic cursor for catch-up / replay
  */
 
-import * as Schema from "effect/Schema"
+import * as HashMap from "effect/HashMap"
 
-// ---------------------------------------------------------------------------
-// IDs
-// ---------------------------------------------------------------------------
+import type { CommandId, EventId, ListId, TodoId } from "./ids.ts"
 
-export const ListId = Schema.String.pipe(Schema.brand("ListId"))
-export type ListId = typeof ListId.Type
-
-export const TodoId = Schema.String.pipe(Schema.brand("TodoId"))
-export type TodoId = typeof TodoId.Type
-
-export const CommandId = Schema.String.pipe(Schema.brand("CommandId"))
-export type CommandId = typeof CommandId.Type
-
-export const EventId = Schema.String.pipe(Schema.brand("EventId"))
-export type EventId = typeof EventId.Type
-
-// ---------------------------------------------------------------------------
-// Commands (intent)
-// ---------------------------------------------------------------------------
-
-export type CreateListCommand = {
-  readonly type: "list.create"
-  readonly commandId: CommandId
-  readonly listId: ListId
-  readonly title: string
-}
-
-export type AddTodoCommand = {
-  readonly type: "todo.add"
-  readonly commandId: CommandId
-  readonly listId: ListId
-  readonly todoId: TodoId
-  readonly text: string
-}
-
-export type CompleteTodoCommand = {
-  readonly type: "todo.complete"
-  readonly commandId: CommandId
-  readonly listId: ListId
-  readonly todoId: TodoId
-}
-
-export type RenameTodoCommand = {
-  readonly type: "todo.rename"
-  readonly commandId: CommandId
-  readonly listId: ListId
-  readonly todoId: TodoId
-  readonly text: string
-}
-
-export type RemoveTodoCommand = {
-  readonly type: "todo.remove"
-  readonly commandId: CommandId
-  readonly listId: ListId
-  readonly todoId: TodoId
-}
-
-export type Command =
-  | CreateListCommand
-  | AddTodoCommand
-  | CompleteTodoCommand
-  | RenameTodoCommand
-  | RemoveTodoCommand
+export * from "./ids.ts"
+export * from "./commands.ts"
 
 // ---------------------------------------------------------------------------
 // Domain events (facts) — source of truth once persisted with a sequence
@@ -103,6 +44,10 @@ export type TodoRenamedPayload = {
 export type TodoRemovedPayload = {
   readonly listId: ListId
   readonly todoId: TodoId
+}
+
+export type ListArchivedPayload = {
+  readonly listId: ListId
 }
 
 /**
@@ -155,6 +100,15 @@ export type DomainEvent =
       readonly occurredAt: string
       readonly payload: TodoRemovedPayload
     }
+  | {
+      readonly sequence: number
+      readonly eventId: EventId
+      readonly type: "list.archived"
+      readonly aggregateId: ListId
+      readonly commandId: CommandId
+      readonly occurredAt: string
+      readonly payload: ListArchivedPayload
+    }
 
 /** Event before the store assigns sequence. */
 export type UnsequencedEvent = Omit<DomainEvent, "sequence">
@@ -173,23 +127,19 @@ export type TodoList = {
   readonly id: ListId
   readonly title: string
   readonly todos: ReadonlyArray<Todo>
+  /** Set by `list.archive` (often via a Nest-style saga). */
+  readonly archived: boolean
 }
 
 /**
  * Command-side + query-side read model for this sample.
- * In T3 these are split (in-memory CommandReadModel + SQL projections),
- * but the fold is the same idea: pure event → state.
+ * Lists live in an Effect `HashMap` (immutable, structural equality).
  */
 export type ReadModel = {
   /** Last applied global event sequence (0 = empty). */
   readonly snapshotSequence: number
-  readonly lists: ReadonlyMap<ListId, TodoList>
+  readonly lists: HashMap.HashMap<ListId, TodoList>
 }
-
-export const emptyReadModel = (): ReadModel => ({
-  snapshotSequence: 0,
-  lists: new Map(),
-})
 
 /** Point-in-time view a client would hydrate from (like T3 shell/thread snapshots). */
 export type Snapshot = {
@@ -197,7 +147,12 @@ export type Snapshot = {
   readonly lists: ReadonlyArray<TodoList>
 }
 
+export const emptyReadModel = (): ReadModel => ({
+  snapshotSequence: 0,
+  lists: HashMap.empty(),
+})
+
 export const toSnapshot = (model: ReadModel): Snapshot => ({
   snapshotSequence: model.snapshotSequence,
-  lists: Array.from(model.lists.values()),
+  lists: Array.from(HashMap.values(model.lists)),
 })

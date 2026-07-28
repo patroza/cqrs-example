@@ -5,20 +5,9 @@
  * Events are applied in sequence order; snapshotSequence advances to event.sequence.
  */
 
-import type { DomainEvent, ReadModel, TodoList } from "./types.ts"
+import { updateList, upsertList } from "./readModel.ts"
+import type { DomainEvent, ReadModel } from "./types.ts"
 import { emptyReadModel } from "./types.ts"
-
-const updateList = (
-  model: ReadModel,
-  listId: TodoList["id"],
-  f: (list: TodoList) => TodoList,
-): ReadModel => {
-  const current = model.lists.get(listId)
-  if (!current) return model
-  const lists = new Map(model.lists)
-  lists.set(listId, f(current))
-  return { ...model, lists }
-}
 
 /**
  * Apply a single domain event. Idempotent w.r.t. sequence: events with
@@ -35,15 +24,15 @@ export const projectEvent = (model: ReadModel, event: DomainEvent): ReadModel =>
   })
 
   switch (event.type) {
-    case "list.created": {
-      const lists = new Map(model.lists)
-      lists.set(event.payload.listId, {
-        id: event.payload.listId,
-        title: event.payload.title,
-        todos: [],
-      })
-      return withSequence({ lists })
-    }
+    case "list.created":
+      return withSequence(
+        upsertList(model, event.payload.listId, {
+          id: event.payload.listId,
+          title: event.payload.title,
+          todos: [],
+          archived: false,
+        }),
+      )
 
     case "todo.added":
       return withSequence(
@@ -87,6 +76,14 @@ export const projectEvent = (model: ReadModel, event: DomainEvent): ReadModel =>
         updateList(model, event.payload.listId, (list) => ({
           ...list,
           todos: list.todos.filter((todo) => todo.id !== event.payload.todoId),
+        })),
+      )
+
+    case "list.archived":
+      return withSequence(
+        updateList(model, event.payload.listId, (list) => ({
+          ...list,
+          archived: true,
         })),
       )
   }
