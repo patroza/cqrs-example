@@ -1,47 +1,49 @@
 # CQRS / Event Sourcing sample (Effect)
 
-A minimal **Effect** todo app that applies the same orchestration principles as
-[T3 Code](https://github.com/pingdotgg/t3code): commands, a pure decider, a
-durable event log as source of truth, a projector into a read model, snapshots
-with a sequence cursor, and client catch-up (replay + live).
+A minimal **Effect** todo app that combines:
 
-This is **not** a copy of T3 — it is a small teaching extract of the pattern.
+1. **T3-style event sourcing** — durable event log, pure decider/projector, snapshots + sequence catch-up  
+2. **Nest-style CQRS surfaces** — QueryBus, side-effect event handlers, sagas (event → command)
 
-## Principles (mapped to T3)
+Inspired by [T3 Code orchestration](https://github.com/pingdotgg/t3code) and the
+[NestJS CQRS recipe](https://docs.nestjs.com/recipes/cqrs).
 
-| Concept | This sample | T3 Code |
-|---|---|---|
-| Command | `list.create`, `todo.add`, … | `thread.create`, `thread.turn.start`, … |
-| Decider | `src/domain/decider.ts` | `apps/server/src/orchestration/decider.ts` |
-| Domain event | `list.created`, `todo.added`, … | `thread.created`, `thread.message-sent`, … |
-| Event store | `src/persistence/EventStore.ts` (in-memory) | SQLite `orchestration_events` |
-| Projector | `src/domain/projector.ts` | `apps/server/src/orchestration/projector.ts` |
-| Engine | `src/engine/Engine.ts` | `OrchestrationEngine` |
-| Snapshot + sequence | `getSnapshot()` → `snapshotSequence` | shell/thread projection snapshots |
-| Replay / catch-up | `replayFrom` + `subscribeWithCatchUp` | `subscribeShell` / `subscribeThread` |
-| Idempotency | `CommandReceipts` by `commandId` | command receipt repository |
-| Live stream | PubSub of domain events | `ServerPushBus` / domain event stream |
+## Two layers of the pattern
+
+| Concern | This sample | NestJS CQRS | T3 Code |
+|---|---|---|---|
+| Command | `Engine.dispatch` | `CommandBus.execute` | `orchestration.dispatchCommand` |
+| Decide / handle write | pure `decider.ts` | `@CommandHandler` | `decider.ts` |
+| Domain events | event store + `sequence` | `EventBus` / aggregate `apply` | `orchestration_events` |
+| **Projector** (state fold) | pure `projector.ts` | often ad hoc / repo write | `projector.ts` + SQL projections |
+| **Event handler** (side effects) | `AuditLog` handler | `@EventsHandler` | reactors (partial overlap) |
+| **Saga** | `ArchiveWhenAllCompleteSaga` | `@Saga()` → new commands | reactors / process managers |
+| **Query** | `QueryBus.execute` | `QueryBus` + `@QueryHandler` | snapshot/query services |
+| Snapshot + catch-up | `subscribeWithCatchUp` | not in Nest recipe | shell/thread subscribe |
+| Idempotency | `CommandReceipts` | not in Nest recipe | command receipts |
+
+Nest’s recipe is primarily **message buses** (command / query / event + sagas).  
+This sample keeps that teaching surface, but the **source of truth is still the event log**.
 
 ### Flow
 
 ```text
 Client
-  │  dispatch(command)
-  ▼
-Engine (serialized worker)
-  │  1. receipt lookup (idempotent)
-  │  2. decide(command, readModel)  → unsequenced events
-  │  3. eventStore.append           → sequence assigned
-  │  4. projectEvent                → in-memory read model
-  │  5. publish                     → live subscribers
-  ▼
-Client catch-up
-  snapshot @ N  →  replay (N+1…M)  →  live (M+1…)
-  (dedupe by sequence)
+  │  CommandBus: dispatch(command)
+  │  QueryBus:   execute(query)  ──────────────────┐
+  ▼                                                │
+Engine (serialized command worker)                 │
+  │  1. receipt lookup (idempotent)                │
+  │  2. decide(command, readModel) → events        │
+  │  3. eventStore.append → sequence               │
+  │  4. projectEvent → read model  ◄── pure fold   │
+  │  5. publish EventBus stream                    │
+  │  6. event handlers (AuditLog, …)  ◄── side FX  │
+  │  7. sagas → enqueue follow-up commands         │
+  ▼                                                │
+Read model ────────────────────────────────────────┘
+  snapshot @ N → replay (N+1…M) → live
 ```
-
-**Events are the source of truth.** The read model is always a fold of events.
-Snapshots are a convenience so clients do not replay the entire log.
 
 ## Quick start
 
@@ -53,58 +55,76 @@ pnpm test
 pnpm typecheck
 ```
 
+## Nest-style pieces added
+
+### QueryBus
+
+```ts
+const result = yield* queryBus.execute({ type: "list.get", listId })
+// → pure handleQuery over the projected read model
+```
+
+Queries never go through the command worker. See `src/cqrs/queries.ts` and
+`src/cqrs/QueryBus.ts`.
+
+### Event handlers (≠ projector)
+
+```ts
+// After each committed event:
+AuditLogHandler records { sequence, eventType, … }
+// Failures → UnhandledExceptionBus (Nest-like)
+```
+
+The **projector** rebuilds lists/todos. The **audit handler** only observes.
+See `src/cqrs/eventHandlers.ts`.
+
+### Sagas
+
+When every todo on a list is completed, `ArchiveWhenAllCompleteSaga` enqueues:
+
+```ts
+{ type: "list.archive", commandId: "saga:archive:<listId>:@<seq>", listId }
+```
+
+That command is processed asynchronously on the same command queue (no
+self-deadlock). See `src/cqrs/sagas.ts`.
+
 ## Layout
 
 ```text
 src/
   domain/
-    types.ts        # Command, DomainEvent, ReadModel, Snapshot
-    errors.ts       # CommandInvariantError, …
-    decider.ts      # pure command + state → events
-    projector.ts    # pure event → read model
+    types.ts         # Command, DomainEvent, ReadModel, Snapshot
+    errors.ts
+    decider.ts       # pure command + state → events
+    projector.ts     # pure event → read model
+  cqrs/
+    queries.ts       # Query types + pure handlers
+    QueryBus.ts      # Nest QueryBus analogue
+    eventHandlers.ts # AuditLog + UnhandledExceptionBus
+    sagas.ts         # event → follow-up commands
   persistence/
-    EventStore.ts   # append + readFromSequence
+    EventStore.ts
     CommandReceipts.ts
   engine/
-    Engine.ts       # dispatch pipeline + live stream
+    Engine.ts        # CommandBus + EventBus core
   client/
-    catchUp.ts      # snapshot / replay / live subscription
-  main.ts           # runnable demo
-  index.ts
+    catchUp.ts       # snapshot / replay / live
+  main.ts
+  appLayer.ts
 test/
   engine.test.ts
 ```
 
-## What is intentionally simplified
+## What is still simplified
 
-| T3 | This sample |
+| Full system | This sample |
 |---|---|
-| SQLite event store + multi-projector SQL tables | In-memory store + single read model |
-| Separate command-side HashMap model vs query projections | One `ReadModel` used for both |
-| Reactors (provider, checkpoints, worktrees) | None — pure domain only |
-| WebSocket subscribe API | In-process `subscribeWithCatchUp` |
-| Provider runtime → commands ingestion | Direct `dispatch` only |
-
-The **shape of the pattern** is what matters: decide → append → project →
-snapshot/replay with a monotonic `sequence`.
-
-## Mental model
-
-```text
-┌──────────────────────────────────────┐
-│  Event store (truth)                 │
-│  events[sequence, type, payload…]    │
-└──────────────────┬───────────────────┘
-                   │ project
-                   ▼
-            Read model / Snapshot
-            (lists, todos, snapshotSequence)
-                   │
-        ┌──────────┴──────────┐
-        ▼                     ▼
-   Command side           Client catch-up
-   (decide invariants)    snapshot + replay + live
-```
+| Nest `AggregateRoot.apply/commit` | Functional decider (T3-style) |
+| Nest request-scoped handlers | Single process, no HTTP scope |
+| SQLite / EventStoreDB | In-memory event store |
+| Multiple SQL read models | One in-memory `ReadModel` |
+| RxJS saga streams | Sync `react(event, model) → commands[]` |
 
 ## License
 

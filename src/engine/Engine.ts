@@ -1,12 +1,13 @@
 /**
- * Engine — serialize commands, decide, append, project, publish.
+ * Engine — CommandBus + EventBus core.
  *
- * Simplified counterpart of T3's OrchestrationEngine:
- *   command → decide → append events → project read model → publish live
+ * T3-style event-sourced path:
+ *   command → decide → append → project → publish
  *
- * Command-side read model is kept in memory and advanced as events commit.
- * On boot we rebuild from the event store (classic ES). T3 seeds from
- * projection tables + catch-up; either is valid.
+ * Nest-style surfaces wired on top:
+ *   - Event handlers (side effects, after commit)
+ *   - Sagas (event → follow-up commands, enqueued async)
+ *   - QueryBus lives separately and only reads the projection
  */
 
 import * as Context from "effect/Context"
@@ -20,6 +21,14 @@ import * as Ref from "effect/Ref"
 import * as Result from "effect/Result"
 import * as Stream from "effect/Stream"
 
+import {
+  AuditLog,
+  runEventHandlers,
+  UnhandledExceptionBus,
+  type EventHandler,
+  type UnhandledExceptionBusShape,
+} from "../cqrs/eventHandlers.ts"
+import { defaultSagas, runSagas, type Saga } from "../cqrs/sagas.ts"
 import { decide } from "../domain/decider.ts"
 import {
   CommandInvariantError,
@@ -38,13 +47,16 @@ export type DispatchResult = {
 export type DispatchError = CommandInvariantError | CommandPreviouslyRejectedError
 
 export interface EngineShape {
-  /** Submit a command; returns last committed sequence on success. */
+  /**
+   * Nest CommandBus.execute — submit a command; returns last committed
+   * sequence for this command's own events (not saga follow-ups).
+   */
   readonly dispatch: (command: Command) => Effect.Effect<DispatchResult, DispatchError>
   /** Materialized snapshot for client hydration. */
   readonly getSnapshot: () => Effect.Effect<Snapshot>
-  /** Full command-side read model (for tests / demos). */
+  /** Full command-side read model (for tests / demos / QueryBus). */
   readonly getReadModel: () => Effect.Effect<ReadModel>
-  /** Live domain event stream (after subscribe). */
+  /** Nest EventBus stream of committed domain events. */
   readonly streamEvents: () => Stream.Stream<DomainEvent>
   /**
    * Replay events after a sequence cursor (catch-up).
@@ -70,6 +82,11 @@ export const EngineLive = Layer.effect(
   Effect.gen(function* () {
     const eventStore = yield* EventStore
     const receipts = yield* CommandReceipts
+    const auditLog = yield* AuditLog
+    const unhandled = yield* UnhandledExceptionBus
+
+    const eventHandlers: ReadonlyArray<EventHandler> = [auditLog.asHandler()]
+    const sagas: ReadonlyArray<Saga> = defaultSagas
 
     // Boot: rebuild command-side model from the event log (full classic ES).
     const existing = yield* eventStore.readAll()
@@ -91,6 +108,10 @@ export const EngineLive = Layer.effect(
             receipts,
             readModelRef,
             eventPubSub,
+            commandQueue,
+            eventHandlers,
+            sagas,
+            unhandled,
           }).pipe(
             Effect.catchCause((cause) =>
               Effect.logError("command worker failed").pipe(
@@ -142,8 +163,22 @@ const processEnvelope = Effect.fn("Engine.processEnvelope")(function* (args: {
   readonly receipts: CommandReceiptsShape
   readonly readModelRef: Ref.Ref<ReadModel>
   readonly eventPubSub: PubSub.PubSub<DomainEvent>
+  readonly commandQueue: Queue.Queue<Envelope>
+  readonly eventHandlers: ReadonlyArray<EventHandler>
+  readonly sagas: ReadonlyArray<Saga>
+  readonly unhandled: UnhandledExceptionBusShape
 }) {
-  const { envelope, eventStore, receipts, readModelRef, eventPubSub } = args
+  const {
+    envelope,
+    eventStore,
+    receipts,
+    readModelRef,
+    eventPubSub,
+    commandQueue,
+    eventHandlers,
+    sagas,
+    unhandled,
+  } = args
   const { command, result } = envelope
 
   // Idempotency: same commandId → same outcome.
@@ -199,7 +234,21 @@ const processEnvelope = Effect.fn("Engine.processEnvelope")(function* (args: {
 
   for (const event of committed) {
     yield* PubSub.publish(eventPubSub, event)
+
+    // Side-effect handlers (not projection). Run before acking dispatch so
+    // callers see handler effects for *this* command without a race. Nest
+    // often runs these fully async; we keep them same-worker for the sample.
+    yield* runEventHandlers({ event, handlers: eventHandlers, unhandled })
+
+    // Sagas → follow-up commands, enqueued without awaiting (no self-deadlock).
+    // Nest also dispatches saga commands asynchronously off the event stream.
+    const followUps = runSagas(event, nextModel, sagas)
+    for (const followUp of followUps) {
+      const sagaResult = yield* Deferred.make<DispatchResult, DispatchError>()
+      yield* Queue.offer(commandQueue, { command: followUp, result: sagaResult })
+    }
   }
 
+  // Ack after projection + handlers; saga follow-ups still run later on the queue.
   yield* Deferred.succeed(result, { sequence: lastSequence })
 })

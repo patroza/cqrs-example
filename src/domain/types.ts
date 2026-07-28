@@ -67,12 +67,20 @@ export type RemoveTodoCommand = {
   readonly todoId: TodoId
 }
 
+/** Nest-style process-manager outcome: archive a list once work is done. */
+export type ArchiveListCommand = {
+  readonly type: "list.archive"
+  readonly commandId: CommandId
+  readonly listId: ListId
+}
+
 export type Command =
   | CreateListCommand
   | AddTodoCommand
   | CompleteTodoCommand
   | RenameTodoCommand
   | RemoveTodoCommand
+  | ArchiveListCommand
 
 // ---------------------------------------------------------------------------
 // Domain events (facts) — source of truth once persisted with a sequence
@@ -103,6 +111,10 @@ export type TodoRenamedPayload = {
 export type TodoRemovedPayload = {
   readonly listId: ListId
   readonly todoId: TodoId
+}
+
+export type ListArchivedPayload = {
+  readonly listId: ListId
 }
 
 /**
@@ -155,6 +167,15 @@ export type DomainEvent =
       readonly occurredAt: string
       readonly payload: TodoRemovedPayload
     }
+  | {
+      readonly sequence: number
+      readonly eventId: EventId
+      readonly type: "list.archived"
+      readonly aggregateId: ListId
+      readonly commandId: CommandId
+      readonly occurredAt: string
+      readonly payload: ListArchivedPayload
+    }
 
 /** Event before the store assigns sequence. */
 export type UnsequencedEvent = Omit<DomainEvent, "sequence">
@@ -173,6 +194,8 @@ export type TodoList = {
   readonly id: ListId
   readonly title: string
   readonly todos: ReadonlyArray<Todo>
+  /** Set by `list.archive` (often via a Nest-style saga). */
+  readonly archived: boolean
 }
 
 /**

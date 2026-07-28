@@ -83,6 +83,12 @@ export const decide = Effect.fn("decider.decide")(function* (input: DecideInput)
 
     case "todo.add": {
       const list = yield* requireList(readModel, command.listId, command.type)
+      if (list.archived) {
+        return yield* new CommandInvariantError({
+          commandType: command.type,
+          detail: `List ${command.listId} is archived.`,
+        })
+      }
       if (list.todos.some((t) => t.id === command.todoId)) {
         return yield* new CommandInvariantError({
           commandType: command.type,
@@ -113,6 +119,12 @@ export const decide = Effect.fn("decider.decide")(function* (input: DecideInput)
 
     case "todo.complete": {
       const list = yield* requireList(readModel, command.listId, command.type)
+      if (list.archived) {
+        return yield* new CommandInvariantError({
+          commandType: command.type,
+          detail: `List ${command.listId} is archived.`,
+        })
+      }
       const todo = list.todos.find((t) => t.id === command.todoId)
       if (!todo) {
         return yield* new CommandInvariantError({
@@ -140,6 +152,12 @@ export const decide = Effect.fn("decider.decide")(function* (input: DecideInput)
 
     case "todo.rename": {
       const list = yield* requireList(readModel, command.listId, command.type)
+      if (list.archived) {
+        return yield* new CommandInvariantError({
+          commandType: command.type,
+          detail: `List ${command.listId} is archived.`,
+        })
+      }
       const todo = list.todos.find((t) => t.id === command.todoId)
       if (!todo) {
         return yield* new CommandInvariantError({
@@ -177,6 +195,12 @@ export const decide = Effect.fn("decider.decide")(function* (input: DecideInput)
 
     case "todo.remove": {
       const list = yield* requireList(readModel, command.listId, command.type)
+      if (list.archived) {
+        return yield* new CommandInvariantError({
+          commandType: command.type,
+          detail: `List ${command.listId} is archived.`,
+        })
+      }
       if (!list.todos.some((t) => t.id === command.todoId)) {
         return yield* new CommandInvariantError({
           commandType: command.type,
@@ -191,6 +215,38 @@ export const decide = Effect.fn("decider.decide")(function* (input: DecideInput)
           commandId,
           occurredAt,
           payload: { listId: command.listId, todoId: command.todoId },
+        },
+      ] satisfies ReadonlyArray<UnsequencedEvent>
+    }
+
+    case "list.archive": {
+      const list = yield* requireList(readModel, command.listId, command.type)
+      if (list.archived) {
+        return yield* new CommandInvariantError({
+          commandType: command.type,
+          detail: `List ${command.listId} is already archived.`,
+        })
+      }
+      if (list.todos.length === 0) {
+        return yield* new CommandInvariantError({
+          commandType: command.type,
+          detail: `List ${command.listId} has no todos to archive.`,
+        })
+      }
+      if (!list.todos.every((t) => t.completed)) {
+        return yield* new CommandInvariantError({
+          commandType: command.type,
+          detail: `List ${command.listId} still has open todos.`,
+        })
+      }
+      return [
+        {
+          eventId,
+          type: "list.archived" as const,
+          aggregateId: command.listId,
+          commandId,
+          occurredAt,
+          payload: { listId: command.listId },
         },
       ] satisfies ReadonlyArray<UnsequencedEvent>
     }

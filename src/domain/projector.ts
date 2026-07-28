@@ -41,6 +41,7 @@ export const projectEvent = (model: ReadModel, event: DomainEvent): ReadModel =>
         id: event.payload.listId,
         title: event.payload.title,
         todos: [],
+        archived: false,
       })
       return withSequence({ lists })
     }
@@ -87,6 +88,14 @@ export const projectEvent = (model: ReadModel, event: DomainEvent): ReadModel =>
         updateList(model, event.payload.listId, (list) => ({
           ...list,
           todos: list.todos.filter((todo) => todo.id !== event.payload.todoId),
+        })),
+      )
+
+    case "list.archived":
+      return withSequence(
+        updateList(model, event.payload.listId, (list) => ({
+          ...list,
+          archived: true,
         })),
       )
   }
